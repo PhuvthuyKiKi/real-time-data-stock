@@ -1,0 +1,124 @@
+version: "3.8"
+
+networks:
+  cap2_net:
+    driver: bridge
+
+volumes:
+  pg_data:
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper
+    networks: [cap2_net]
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka
+    networks: [cap2_net]
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9093,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9093,EXTERNAL://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # ---------- PostgreSQL ----------
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    restart: always
+    networks: [cap2_net]
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin123
+      POSTGRES_DB: stocks
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+
+  # ---------- pgAdmin ----------
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin
+    networks: [cap2_net]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+
+  # ---------- Flink ----------
+  flink-jobmanager:
+    image: flink:1.18.1-scala_2.12
+    container_name: flink-jobmanager
+    networks: [cap2_net]
+    ports:
+      - "8081:8081"
+      - "6123:6123"
+      - "6124:6124"
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+    command: jobmanager
+    volumes:
+      - ./flink-connector-jdbc-3.1.2-1.18.jar:/opt/flink/lib/flink-connector-jdbc-3.1.2-1.18.jar
+      - ./postgresql-42.7.3.jar:/opt/flink/lib/postgresql-42.7.3.jar
+      - ./flink-sql-connector-kafka-3.1.0-1.18.jar:/opt/flink/lib/flink-sql-connector-kafka-3.1.0-1.18.jar
+      - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-sql-connector-elasticsearch7-3.0.1-1.17.jar
+      - ./flink_aapl_anomaly.sql:/opt/flink/flink_aapl_anomaly.sql
+  flink-taskmanager:
+    image: flink:1.18.1-scala_2.12
+    container_name: flink-taskmanager
+    networks: [cap2_net]
+    depends_on:
+      - flink-jobmanager
+    environment:
+      JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      FLINK_PROPERTIES: |
+        taskmanager.numberOfTaskSlots: 2
+    command: taskmanager
+    volumes:
+      - ./flink-connector-jdbc-3.1.2-1.18.jar:/opt/flink/lib/flink-connector-jdbc-3.1.2-1.18.jar
+      - ./postgresql-42.7.3.jar:/opt/flink/lib/postgresql-42.7.3.jar
+      - ./flink-sql-connector-kafka-3.1.0-1.18.jar:/opt/flink/lib/flink-sql-connector-kafka-3.1.0-1.18.jar
+      - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-sql-connector-elasticsearch7-3.0.1-1.17.jar
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    networks:
+      - cap2_net
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.0
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - cap2_net
